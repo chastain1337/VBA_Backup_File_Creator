@@ -38,16 +38,17 @@ Dim OrgFile As File, MRBackup As File
 
 '------------------------------------------------------
 RootBackupPath = "C:\Backups"
+If Not FSO.FolderExists(RootBackupPath) Then FSO.CreateFolder (RootBackupPath)
 '------------------------------------------------------
 
 'Guarantee outdated action is set properly
     If OutdatedAction < -1 Or OutdatedAction > 1 Then Err.Raise Number:=513, Description:="The ""OutdatedAction"" is incorrectly set."
     
     
-'Make sure every file exists, and exit the sub if there is an error
-    Call CheckThatAllFilesExist
+'Make sure data is valid and every file exists, and exit the sub if there is an error
+    If Not DataIsValid Then Exit Sub
     If WorksheetFunction.CountIf(Range("B:B"), False) > 0 Then GoTo MissingFilesError
-    
+        
     
 'Ensure that "Most Recent" folder, "Outdated", and this years backup folder exists
     MostRecentPath = RootBackupPath & "\Most Recent"
@@ -141,7 +142,7 @@ Exit Sub
 
 End Sub
 
-Sub CheckThatAllFilesExist()
+Function DataIsValid()
 ' Check that all files from A2 to bottom exist
 Dim LastRow As Long
 LastRow = Range("A" & Rows.Count).End(xlUp).Row
@@ -152,10 +153,13 @@ For i = 2 To LastRow
     If FilePath = "" Then GoTo EmptyCellError
     If Not FSO.FileExists(FilePath) Then
         Cells(i, 2) = False
+    ElseIf Cells(i, 2) <> "" Then
+        Cells(i, 2) = ""
     End If
 Next i
 
-Exit Sub
+DataIsValid = True
+Exit Function
 
 
 '------------------
@@ -164,13 +168,15 @@ Exit Sub
 EmptyCellError:
     MsgBox "Row " & i & " is blank. Either delete this row or enter a valid File Path.", vbCritical, "Empty Cell Error"
     Cells(i, 1).Select
-    Exit Sub
+    DataIsValid = False
+    Exit Function
 
 NoHeaderError:
     MsgBox "A1 must = ""Filepath"". Ensure that there is no actual File Path in this cell and then type ""Filepath"" here.", vbCritical, "Validation Error"
-    Exit Sub
+    DataIsValid = False
+    Exit Function
 
-End Sub
+End Function
 Sub GetMostRecentBackup(FileName, RootFilePath)
 '=================================================== OBSOLETE ===================================================
 'Recursively find the most recent version of a file starting at a root folder
@@ -194,3 +200,5 @@ For Each Folder In ThisFolder.SubFolders
 Next Folder
 
 End Sub
+
+
