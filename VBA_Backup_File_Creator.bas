@@ -11,10 +11,10 @@ Attribute VB_Name = "Backup_Creator"
 '
 '
 '
-'
-'   - Set "RootBackupPath" in CreateBackups() ("C:\Backups") (will create if it doesn't already exist)
-'   - Set OutdatedAction in CreateBackups() (default to -1)
-'   - Set DaysOld in CheckForOutdatedBackups() (default to 180)
+'   - Set the following variables in the workbook:
+'   - Root Backup Directory
+'   - Outdated Action
+'   - Days Old
 '=====================================================================================================================
 
 Public FSO                          As New FileSystemObject     'FSO object used to interact with the filesystem
@@ -22,23 +22,31 @@ Public MostRecentDateModified       As Date                     'Most recent dat
 Public RootBackupPath               As String                   'The root backup used, actually defined in "CreateBackups"
 Public OutdatedPath                 As String
 Public OutdatedAction               As Integer
+Public fl As File
+Public BackupsMade As Long, BackupsMoved As Long, OutdatedDeleted As Long, OutdatedMoved As Long
        
 
 Sub CreateBackups()
 Dim LastRow As Long, MostRecentPath As String, PotentialMostRecentFilePath As String, ThisYearFolder As String
-Dim OrgFile As File, MRBackup As File
 
+Dim OrgFile As File, MRBackup As File
+Dim List As Worksheet, Vars As Worksheet, Log As Worksheet
+    Set List = ThisWorkbook.Worksheets("List")
+    Set Vars = ThisWorkbook.Worksheets("Variables")
+    Set Log = ThisWorkbook.Worksheets("Logs")
+
+
+BackupsMade = 0:    BackupsMoved = 0:   OutdatedDeleted = 0:    OutdatedMoved = 0
 '------------------------------------------------------
 ' What to do with outdated backups (older than date specified)
-    OutdatedAction = -1
+    OutdatedAction = CInt(Vars.Cells(3, "C"))
 '  -1 = do nothing
 '   0 = move to "Outdated" folder
 '   1 = delete
 '------------------------------------------------------
 
 '------------------------------------------------------
-RootBackupPath = "C:\Backups"
-If Not FSO.FolderExists(RootBackupPath) Then FSO.CreateFolder (RootBackupPath)
+RootBackupPath = Vars.Cells(2, "C")
 '------------------------------------------------------
 
 'Guarantee outdated action is set properly
@@ -47,7 +55,7 @@ If Not FSO.FolderExists(RootBackupPath) Then FSO.CreateFolder (RootBackupPath)
     
 'Make sure data is valid and every file exists, and exit the sub if there is an error
     If Not DataIsValid Then Exit Sub
-    If WorksheetFunction.CountIf(Range("B:B"), False) > 0 Then GoTo MissingFilesError
+    If WorksheetFunction.CountIf(List.Range("B:B"), False) > 0 Then GoTo MissingFilesError
         
     
 'Ensure that "Most Recent" folder, "Outdated", and this years backup folder exists
@@ -63,9 +71,9 @@ If Not FSO.FolderExists(RootBackupPath) Then FSO.CreateFolder (RootBackupPath)
 
 
 'Loop through every file
-    LastRow = Range("A" & Rows.Count).End(xlUp).Row
+    LastRow = List.Range("A" & Rows.Count).End(xlUp).Row
     For i = 2 To LastRow
-        Set OrgFile = FSO.GetFile(Cells(i, 1))
+        Set OrgFile = FSO.GetFile(List.Cells(i, 1))
         PotentialMostRecentFilePath = MostRecentPath & "\" & OrgFile.Name
         If FSO.FileExists(PotentialMostRecentFilePath) Then                         ' It HAS a most recent backup: check if the MRDM (most recent date modified) is > OrgFile DM
             Set MRBackup = FSO.GetFile(PotentialMostRecentFilePath)
@@ -76,12 +84,16 @@ If Not FSO.FolderExists(RootBackupPath) Then FSO.CreateFolder (RootBackupPath)
             'The backup is outdated, move it and create a new backup
             BackupFolderPath = RootBackupPath & "\" & Year(Now) & "\" & Format(Now, "yy-mm-dd")
             If Not FSO.FolderExists(BackupFolderPath) Then FSO.CreateFolder (BackupFolderPath)      'Create the backup directory for today if it doesn't already exist
-            FSO.MoveFile MRBackup.Path, BackupFolderPath & "\" & MRBackup.Name                      'Move MRBackup to todays backup directory
             
+            'Move MRBackup to todays backup directory, but if there is already a file with that name in there we have to delete it (this can occure IFF the backup creator is ran >1ce in a day.
+            If FSO.FileExists(BackupFolderPath & "\" & MRBackup.Name) Then FSO.DeleteFile (BackupFolderPath & "\" & MRBackup.Name)
+            FSO.MoveFile MRBackup.Path, BackupFolderPath & "\" & MRBackup.Name
+            BackupsMoved = BackupsMoved + 1
         End If
         
         
     'Create backup - skipped if file in "Most Recent" is still Most Recent
+        BackupsMade = BackupsMade + 1
         OrgFile.Copy (MostRecentPath & "\" & OrgFile.Name)
         
         
@@ -90,6 +102,18 @@ CheckForOlderBackupsToDelete:
         If OutdatedAction > -1 Then Call CheckForOutdatedBackups(OrgFile)
     
     Next i
+Select Case OutdatedAction
+    Case -1
+        OutdatedActionTranslation = "Ignore"
+    Case 0
+        OutdatedActionTranslation = "Move"
+    Case 1
+        OutdatedActionTranslation = "Delete"
+End Select
+
+LogDataArr = Array(Now, RootBackupPath, LastRow - 1, OutdatedActionTranslation, Vars.Cells(4, "C"), BackupsMade, BackupsMoved, OutdatedDeleted, OutdatedMoved)
+LastRowLogs = Log.Range("A" & Rows.Count).End(xlUp).Row + 1
+Log.Range("A" & LastRowLogs & ":I" & LastRowLogs) = LogDataArr
 
 Exit Sub
 
@@ -103,7 +127,7 @@ Dim YearFolder As Folder, DateFolder As Folder, CutOffDate As Date, PotentialFil
 
 '----------------------------------------------------------
 '"If a file is older than {$DaysOld} days, move/delete it"
- DaysOld = 180
+ DaysOld = ThisWorkbook.Worksheets("Variables").Cells(4, "C")
 '----------------------------------------------------------
 
 'Set cut off date
@@ -125,11 +149,13 @@ For Each YearFolder In FSO.GetFolder(RootBackupPath).SubFolders                 
                             VNumber = 0
                             Do
                                 VNumber = VNumber + 1
-                                NewFilePath = OutdatedPath & "\" & OldBackup.ShortName & "-" & VNumber & "." & FSO.GetExtensionName(OldBackup.Path)
+                                NewFilePath = OutdatedPath & "\" & FSO.GetBaseName(OldBackup.Path) & "-" & VNumber & "." & FSO.GetExtensionName(OldBackup.Path)
                             Loop While FSO.FileExists(NewFilePath)
                             FSO.MoveFile OldBackup.Path, NewFilePath
+                            OutdatedMoved = OutdatedMoved + 1
                         ElseIf OutdatedAction = 1 Then
                             FSO.DeleteFile (OldBackup.Path)
+                            OutdatedDeleted = OutdatedDeleted + 1
                         End If
                     End If
                 End If
@@ -143,18 +169,24 @@ Exit Sub
 End Sub
 
 Function DataIsValid()
+Dim List As Worksheet, Vars As Worksheet
+Set List = ThisWorkbook.Worksheets("List")
+Set Vars = ThisWorkbook.Worksheets("Variables")
 ' Check that all files from A2 to bottom exist
 Dim LastRow As Long
-LastRow = Range("A" & Rows.Count).End(xlUp).Row
-If Not Cells(1, "A") = "Filepath" Then GoTo NoHeaderError   '(1,1) must be "Filepath" to make this list easily convertable to a Seach Everything file list (*.efu)
-    
+LastRow = List.Range("A" & Rows.Count).End(xlUp).Row
+If Not List.Cells(1, "A") = "Filename" Then GoTo NoHeaderError   '(1,1) must be "Filename" to make this list easily convertable to a Seach Everything file list (*.efu)
+PotentialRootBackupDir = Vars.Cells(2, "C")
+If Not FSO.FolderExists(PotentialRootBackupDir) Or Right(PotentialRootBackupDir, 1) = "\" Then GoTo NoRootBackupSpecified
+If Not IsNumeric(Vars.Cells(4, "C")) Then GoTo InvalidDaysOld
+
 For i = 2 To LastRow
-    FilePath = Cells(i, 1)
+    FilePath = List.Cells(i, 1)
     If FilePath = "" Then GoTo EmptyCellError
     If Not FSO.FileExists(FilePath) Then
-        Cells(i, 2) = False
-    ElseIf Cells(i, 2) <> "" Then
-        Cells(i, 2) = ""
+        List.Cells(i, 2) = False
+    ElseIf List.Cells(i, 2) <> "" Then
+        List.Cells(i, 2) = ""
     End If
 Next i
 
@@ -165,6 +197,16 @@ Exit Function
 '------------------
 ' Errors
 '------------------
+NoRootBackupSpecified:
+    MsgBox "The Root Backup Directory variable either does not exist, was not set, or ends with a ""\"". Correct and try again.", vbCritical, "Validation Error"
+    DataIsValid = False
+    Exit Function
+
+InvalidDaysOld:
+    MsgBox "The Days Old variable is improperly set. Correct and try again.", vbCritical, "Validation Error"
+    DataIsValid = False
+    Exit Function
+    
 EmptyCellError:
     MsgBox "Row " & i & " is blank. Either delete this row or enter a valid File Path.", vbCritical, "Empty Cell Error"
     Cells(i, 1).Select
@@ -172,7 +214,9 @@ EmptyCellError:
     Exit Function
 
 NoHeaderError:
-    MsgBox "A1 must = ""Filepath"". Ensure that there is no actual File Path in this cell and then type ""Filepath"" here.", vbCritical, "Validation Error"
+    MsgBox "A1 must = ""Filename"". Ensure that there is no actual File Path in this cell and then type ""Filename"" here.", vbCritical, "Validation Error"
+    List.Activate
+    Cells(1, 1).Activate
     DataIsValid = False
     Exit Function
 
@@ -200,5 +244,6 @@ For Each Folder In ThisFolder.SubFolders
 Next Folder
 
 End Sub
+
 
 
